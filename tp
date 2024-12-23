@@ -1,0 +1,169 @@
+if ! command -v python3 &> /dev/null
+then
+    echo "错误: Python3 未安装。请安装 Python3 后重试。"
+    exit 1
+fi
+if ! python3 -c "import tqdm" &> /dev/null
+then
+    echo "错误: 'tqdm' 模块未安装。请运行 'pip install tqdm' 后重试。"
+    exit 1
+fi
+read -p "请输入原版的 .dat 文件的完整路径: " original_file 
+if [ -z "$original_file" ]; then
+    echo "错误: 未输入文件路径。"
+    exit 1
+fi
+if [ ! -f "$original_file" ]; then
+    echo "错误: 文件 '$original_file' 不存在。"
+    exit 1
+fi
+echo "文件 '$original_file' 存在。"
+read -p "请输入提取配置的 .dat 文件的完整路径: " modified_file 
+if [ -z "$modified_file" ]; then
+    echo "错误: 未输入文件路径。"
+    exit 1
+fi
+if [ ! -f "$modified_file" ]; then
+    echo "错误: 文件 '$modified_file' 不存在。"
+    exit 1
+fi
+echo "文件 '$original_file' 存在。"
+python3 << END_PYTHON
+import re
+import os
+from tqdm import tqdm  # 导入 tqdm
+def compare_files(original_path, modified_path, output_path):
+    differences = []
+    file_size = os.path.getsize(original_path)  # 获取文件大小，用于进度条
+    with open(original_path, 'rb') as f1, open(modified_path, 'rb') as f2:
+        with tqdm(total=file_size, desc="提取进度", unit='B', unit_scale=True) as pbar:
+            while True:
+                b1 = f1.read(1)
+                b2 = f2.read(1)
+                pbar.update(1)  # 更新进度条
+                if b1 != b2:
+                    if b1 and b2:
+                        offset = f1.tell() - 1
+                        differences.append((offset, b1[0], b2[0]))
+                    else:
+                        continue
+                if not b1 and not b2:
+                    break
+        with open(output_path, 'w', encoding='utf-8') as outfile:
+            for offset, byte_original, byte_modified in differences:
+                if offset >= 9:
+                    ninth_byte_offset = offset - 9
+                    f1.seek(ninth_byte_offset)
+                    ninth_byte = f1.read(1)[0]
+                    if ninth_byte == 0x04:
+                        modified_bytes = []
+                        for i in range(4):
+                            f1.seek(offset + i)
+                            byte_f1 = f1.read(1)
+                            if not byte_f1:
+                                break
+                            byte_f1 = byte_f1[0]
+                            f2.seek(offset + i)
+                            byte_f2 = f2.read(1)
+                            if not byte_f2:
+                                break
+                            byte_f2 = byte_f2[0]
+                            if byte_f1 != byte_f2:
+                                modified_bytes.append((byte_f1, byte_f2))
+                            else:
+                                modified_bytes.append((byte_f1, byte_f1))
+                        if len(modified_bytes) == 4:
+                            original_group = ''.join([f"{byte_f1:02X}" for byte_f1, _ in modified_bytes])
+                            modified_group = ''.join([f"{byte_f2:02X}" for _, byte_f2 in modified_bytes])
+                            outfile.write(f"{original_group} {modified_group}\n")
+    seen = set()
+    unique_lines = []
+    with open(output_path, 'r', encoding='utf-8') as file:
+        for line in file:
+            parts = line.strip().split()
+            sorted_parts = sorted(parts)
+            unique_line = ' '.join(sorted_parts)
+            if unique_line not in seen:
+                seen.add(unique_line)
+                unique_lines.append(line.strip())
+    unique_output_path = '提取结果.txt'
+    with open(unique_output_path, 'w', encoding='utf-8') as file:
+        for line in unique_lines:
+            file.write(line + '\n')
+    convert_hex_pairs_to_decimal(unique_output_path, '提取结果.txt')
+    add_comments_to_提取结果txt('代码表.txt', '提取结果.txt', '提取结果.txt')
+def convert_hex_pairs_to_decimal(input_file, output_file):
+    try:
+        with open(input_file, 'r', encoding='utf-8') as f:
+            hex_lines = f.readlines()
+        total_lines = len(hex_lines)
+        with open(output_file, 'w', encoding='utf-8') as f:
+            for line in hex_lines:
+                line = line.strip()
+                if not line:
+                    continue  # 跳过空行
+                hex_parts = line.split()
+                if len(hex_parts) != 2:
+                    print(f"Skipping invalid line (expected 2 hex values): {line}")
+                    continue  # 跳过格式不正确的行
+                for hex_str in hex_parts:
+                    hex_str = hex_str.strip().replace(" ", "")
+                    if len(hex_str) % 2 != 0:
+                        print(f"Skipping invalid hex string: {hex_str}")
+                        continue  # 跳过无效的十六进制字符串
+                    byte_data = bytes.fromhex(hex_str)
+                    if len(byte_data) == 4:
+                        number = int.from_bytes(byte_data, byteorder='little')
+                    elif len(byte_data) == 2:
+                        number = int.from_bytes(byte_data, byteorder='little')
+                    else:
+                        print(f"Unsupported byte length for hex string: {hex_str}")
+                        number = None
+                    if number is not None:
+                        f.write(f"{number} ")
+                f.write("\n")  # 每行写完两个数后换行 
+    except FileNotFoundError as e:
+        print(f"文件未找到: {e}")
+    except Exception as e:
+        print(f"发生错误: {e}")
+def add_comments_to_提取结果txt(z_file, four_file, result_file):
+    comment_dict = {}
+    with open(z_file, 'r', encoding='utf-8') as zf:
+        for line in zf:
+            line = line.strip()
+            if line:
+                match = re.match(r'\d+\s*--\s*(\d+)\s*--\s*(.*?)\s*--\s*(.*)', line)
+                if match:
+                    number, comment1, comment2 = match.groups()
+                    comment_dict[number] = comment1  # 提取第二个注释
+    with open(four_file, 'r', encoding='utf-8') as tf:
+        lines = [line.strip() for line in tf if line.strip()]
+    updated_lines = []
+    for line in lines:
+        match = re.match(r'(\d+)\s+(\d+)', line)
+        if match:
+            first_number, second_number = match.groups()
+            first_comment = comment_dict.get(first_number, '')
+            second_comment = comment_dict.get(second_number, '')
+            if first_comment and second_comment:
+                updated_line = f"       - [{first_number},  {second_number}]#{first_comment}, {second_comment}\n"
+                updated_lines.append(updated_line)
+            else:
+                updated_lines.append(f"{line}\n")
+        else:
+            updated_lines.append(f"{line}\n")
+    with open(result_file, 'w', encoding='utf-8') as rf:
+        rf.writelines(updated_lines)
+    print(f"提取的美化配置已保存到 {result_file}")
+if __name__ == "__main__":
+    original_file = '$original_file'
+    modified_file = '$modified_file'
+    output_file = '提取结果.txt'
+    import os
+    if not os.path.isfile(original_file):
+        print(f"错误: 文件 '{original_file}' 不存在。请检查路径并重试。")
+    elif not os.path.isfile(modified_file):
+        print(f"错误: 文件 '{modified_file}' 不存在。请检查路径并重试。")
+    else:
+        compare_files(original_file, modified_file, output_file)
+END_PYTHON
